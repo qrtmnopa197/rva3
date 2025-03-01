@@ -1,0 +1,259 @@
+---
+title: "Analysis for RVA 2"
+author: "Daniel P"
+output: html_document
+---
+
+Set up
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(mc.cores=12)
+
+path_to_project_directory <- "~/projects/RVA_2/"
+path_to_s22 <- "~/projects/spring_2022_study/"
+path_to_rva <- "~/projects/RVA/"
+
+stan_model_dir<- paste0(path_to_project_directory,"code/stan_models/")
+model_out_dir <- paste0(path_to_project_directory,"output/results/stan_model_fits/")
+
+#load custom functions
+source(paste0(path_to_s22,"code/functions/fit_stan_model.R")) 
+source(paste0(path_to_s22,"code/functions/s22_utilities.R")) 
+source(paste0(path_to_s22,"code/functions/stan_utilities.R"))
+source(paste0(path_to_rva,"code/functions/rva_utilities.R"))
+source(paste0(path_to_project_directory,"code/functions/rva2_utilities.R")) 
+
+library(tidyverse)
+library(cmdstanr)
+library(bayesplot)
+library(abind)
+library(sigmoid)
+library(posterior)
+```
+
+Read in data, run through QC
+```{r}
+trials <- read.csv(paste0(path_to_project_directory,"analysis_data/trial_level_data_all_subs_2024-09-06_14_00_57.801362.csv"))
+subs <- read.csv(paste0(path_to_project_directory,"analysis_data/sub_level_data_all_subs_2024-09-06_14_00_57.801362.csv"))
+
+sub_hard_fail <- subs %>% filter(att_checks_passed < 3 |
+                                 answers_incorrect > 2 |
+                                 sd_valrat < .05 |
+                                 sd_probrat < .05 |
+                                 valrat_skipped_percent > .15 |
+                                 probrat_skipped_percent > .15 |
+                                 trials_completed < 80)
+
+#count the number of soft QC cutoffs each subject meets
+subs$softs <- 0
+for(i in 1:nrow(subs)){
+  subs$softs[i] <- length(which(c(subs$att_checks_passed[i] == 3,subs$answers_incorrect[i] == 2,
+                                  subs$sd_valrat[i] < .07, subs$valrat_skipped_percent[i] > .10,
+                                  subs$sd_probrat[i] < .07, subs$probrat_skipped_percent[i] > .10)))
+}
+
+sub_soft_fail <- filter(subs,softs >= 2) #identify those who meet more than 2 soft cutoffs
+
+subs_to_exclude <- unique(c(sub_hard_fail$id,sub_soft_fail$id)) #get subjects who failed either set of criteria
+
+#clean data
+trials <- trials %>% filter(!(id %in% subs_to_exclude))
+subs <- subs %>% filter(!(id %in% subs_to_exclude))
+
+length(subs_to_exclude)/(nrow(subs)+length(subs_to_exclude)) #get percent excluded
+```
+
+Data transformations
+```{r}
+trials <- add_sub_indices(trials) #add subject indices to the df. These will match the indices used in Stan.
+trials <- add_probe_number(trials,newcol="vrat_number",val_col="val_rat") #add valence rating number
+trials <- add_probe_number(trials,newcol="prat_number",val_col="prob_rat") #add probability rating number
+trials$prev_vrat_cent <- trials$prev_rate - mean(trials$prev_rate,na.rm=T)
+
+trials <- trials %>% mutate(frac_ix = case_when(
+                      frac_img == 1 ~ 1,
+                      frac_img == 9 ~ 2,
+                      frac_img == 3 ~ 3,
+                      frac_img == 5 ~ 4,
+                      )) %>%
+                    mutate(alt_frac_ix = case_when(
+                      frac_ix == 1 ~ 2,
+                      frac_ix == 2 ~ 1,
+                      frac_ix == 3 ~ 4,
+                      frac_ix == 4 ~ 3
+                    ))
+```
+
+How many subjects said they experienced significant emotion during the task?
+```{r}
+sum(subs$sig_emot == "Yes")/nrow(subs)
+```
+
+```{r}
+subs$age <- as.numeric(subs$age)
+mean(subs$age)
+median(subs$age)
+sd(subs$age)
+```
+
+```{r}
+sum(subs$gender=="Male")
+```
+
+```{r}
+sum(subs$gender=="Female")
+```
+
+```{r}
+sum(subs$gender=="Non-binary")
+```
+
+```{r}
+rew_cors <- trials %>%
+              group_by(id) %>%
+              summarize(correlation = cor(outcome, val_rat, use = "complete.obs"))
+mean(rew_cors$correlation)
+```
+
+# Preregistered analyses
+
+Fit preregistered model
+```{r}
+prereg <- fit_stan_model(stan_file=paste0(stan_model_dir,"prereg_rva2.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva2")
+```
+
+Review results
+```{r}
+prereg$diagnostics
+```
+
+```{r}
+view(filt_sum(prereg$sum,"mu"))
+view(filt_sum(prereg$sum,"sigma"))
+view(prereg$sum)
+```
+
+
+Get r-sq for probability ratings
+```{r}
+pp_prereg <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("prob_pred"))
+ps_prereg <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("prob_sigma"))
+prob_rsq_prereg <- mcmc_rsq(pp_prereg,ps_prereg,print_plot=FALSE)
+prob_rsq_prereg$sum['median']
+```
+
+Get r-sq for valence ratings
+```{r}
+vp_prereg <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("val_pred"))
+vss_prereg <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
+vs_prereg <- apply(vss_prereg,c(1,2,3),half_normal_mean)
+val_rsq_prereg <- mcmc_rsq(vp_prereg,vs_prereg,print_plot=FALSE)
+val_rsq_prereg$sum[['median']]
+```
+
+Do the vector-based analysis
+```{r}
+set.seed(6)
+rew <- c(1,0,0)
+rpe <- c(0.5,-0.5,0)
+mm <- c(0,0.5,0.5)
+dvec_mat <- cbind(rew,rpe,mm) #turn into matrix
+
+prereg_eff <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("B_rew_mu","B_V_mu","B_alt_mu"))
+
+vec_ws_prereg <- apply(prereg_eff,c(1,2),vec_optim,dvec=dvec_mat,init_pars=c(0,0,0)) #get vector weights
+
+vec_ws_prereg_org <- aperm(vec_ws_prereg,c(2,3,1)) #rearrange dimensions
+dimnames(vec_ws_prereg_org)[[3]] <- c("rew","rpe","mm") #name appropriately
+create_interval_plot(vec_ws_prereg_org,names = c("mm","rpe","rew"),xmin = -.012, xmax = .1)
+```
+
+```{r}
+mn_data_prereg <- apply(prereg_eff,c(1,2),function(x) sum(abs(x))) #get the manhattan norms for each data vector by summing the absolute values
+
+comb_array_prereg <- abind(vec_ws_prereg_org,mn_data_prereg,along=3) #staple mn_data to the back of the third dimension of the vector weight array
+vec_ws_norm_prereg <- apply(comb_array_prereg,c(1,2),get_ports) #get portions of relationship accounted for
+
+vec_ws_norm_org_prereg <- aperm(vec_ws_norm_prereg,c(2,3,1))
+dimnames(vec_ws_norm_org_prereg)[[3]] <- c("rew","rpe","mm","resid") #name meaningfully
+
+create_interval_plot(arr = vec_ws_norm_org_prereg, names = c("resid","mm","rpe","rew"), xmin = -.012, xmax = 1)
+```
+
+Get regression effects
+```{r}
+create_interval_plot(arr = prereg_eff, names = c("B_alt_mu","B_V_mu","B_rew_mu"), xmin = -0.02, xmax = .04)
+```
+
+```{r}
+v_draws <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("B_V_mu"))
+rew_draws <- get_draws("prereg_rva2",model_out_dir=model_out_dir,vars=c("B_rew_mu"))
+quantile(v_draws,c(.50,.025,.975))*100
+quantile(rew_draws,c(.50,.025,.975))*100
+```
+
+# Exploratory analyses
+
+Testing whether affect associations contribute to learning
+```{r}
+arl_pav2 <- fit_stan_model(stan_file=paste0(stan_model_dir,"arl_pav2.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva2")
+```
+
+```{r}
+pB_V <- get_draws("arl_pav2",model_out_dir = model_out_dir,vars=c("pB_V_mu"))
+pB_A <- get_draws("arl_pav2",model_out_dir = model_out_dir,vars=c("pB_A_mu"))
+quantile(pB_V,c(.025,.50,.975))*200
+quantile(pB_A,c(.025,.50,.975))
+```
+
+
+Negative correlation between learning rate and V? Start by doing this very roughly
+```{r}
+b_v_mean <- ncp_mean_hist(prereg_rva2$sum,"B_V",print_hist=F)
+alpha_mean <- ncp_mean_hist(prereg_rva2$sum,"alpha",print_hist=F)
+b_v_alpha_fit <- lm(b_v_mean$means ~ alpha_mean$means)
+summary(b_v_alpha_fit)
+```
+
+Now doing it more properly by fitting a model that allows these effects to correlate
+```{r}
+bv_alpha_cor2 <- fit_stan_model(stan_file=paste0(stan_model_dir,"bv_alpha_cor2.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva2")
+```
+
+```{r}
+bv_alpha_cor <- get_draws("bv_alpha_cor2",model_out_dir = model_out_dir,vars=c("bv_alpha_cor"))
+quantile(bv_alpha_cor,c(.025,.50,.975))
+mean(bv_alpha_cor < 0)
+```
+
+Testing whether probability rating residuals predict affect
+```{r}
+v_resid2 <- fit_stan_model(stan_file=paste0(stan_model_dir,"v_resid2.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva2")
+```
+
+```{r}
+raw_effs <- get_draws("v_resid2",vars=c("B_V_r_mu","B_alt_r_mu","B_V_mu","B_alt_mu","B_rew_mu"),model_out_dir=model_out_dir)
+create_interval_plot(arr = raw_effs, names = c("B_alt_r_mu","B_V_r_mu","B_alt_mu","B_V_mu","B_rew_mu"), xmin = -0.005, xmax = .035)
+```
+
+Get r-squared for this model
+```{r}
+vp_resid<- get_draws("v_resid2",model_out_dir=model_out_dir,vars=c("val_pred"))
+vss_resid <- get_draws("v_resid2",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
+vs_resid <- apply(vss_resid,c(1,2,3),half_normal_mean)
+val_rsq_resid <- mcmc_rsq(vp_resid,vs_resid,print_plot=FALSE)
+val_rsq_resid$sum[['median']]
+```
+

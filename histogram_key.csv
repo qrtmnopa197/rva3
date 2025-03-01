@@ -1,0 +1,5 @@
+﻿var,x_min,x_max,y_min,y_max
+val_rat,-0.1,1.1,-0.1,25
+val_rat_rt,-0.1,7,-0.1,35
+prob_rat,-0.1,1.1,-0.1,25
+prob_rat_rt,-0.1,7,-0.1,35
