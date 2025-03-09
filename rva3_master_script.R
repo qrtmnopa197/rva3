@@ -27,7 +27,7 @@ source(paste0(path_to_s22fu,"code/functions/s22fu_utilities.R"))
 source(paste0(path_to_rva,"code/functions/rva_utilities.R"))
 source(paste0(path_to_project_directory,"code/functions/rva3_wrangle_psychopy_data.R"))
 
-csvs_to_analyze <- get_csvs_to_analyze(path_to_project_directory,ids_to_exclude,first_time="2025-03-01") #get the usable CSVs to analyze
+csvs_to_analyze <- get_csvs_to_analyze(path_to_project_directory,ids_to_exclude,first_time="2025-03-05") #get the usable CSVs to analyze
 all_data <- lapply(csvs_to_analyze, rva3_wrangle_psychopy_data) #reformats each CSV, turning it into a long dataset usable for analysis, and adds all variables of interest that can be created from the raw data alone.
                                                                #Returns a list - one element for each subject - where each element is itself a list containing dfs with the trial-level data and subject-level data
 
