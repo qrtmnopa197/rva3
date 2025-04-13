@@ -12,6 +12,8 @@ stan_data_rva3 <- function(trials,n_t){
   
   bl_cent <- sub_by_trial_vec_list(trials,"bl_cent") # Block number, mean-centered
   tr_cent <- sub_by_trial_vec_list(trials,"tr_cent") # Trial number, mean-centered
+  tr_sub_cent <- sub_by_trial_vec_list(trials,"tr_sub_cent") # Subject-level trial number, mean-centered
+  
   
   frac <- sub_by_trial_matrix(trials,"frac_ix") # Fractal index on each trial
 
@@ -21,6 +23,7 @@ stan_data_rva3 <- function(trials,n_t){
   
   val_rat_trials <- filter(trials,vrat_number != 0)
   val_rat <- val_rat_trials$val_rat
+  val_rat_z <- val_rat_trials$valrat_z
   
   #probability rating data
   prob_rat_num <- sub_by_trial_matrix(trials,"prat_number")
@@ -41,11 +44,13 @@ stan_data_rva3 <- function(trials,n_t){
     val_rat_num = val_rat_num,
     n_vrat = n_vrat,
     val_rat = val_rat,
+    val_rat_z = val_rat_z,
     prob_rat_num = prob_rat_num,
     n_prat = n_prat,
     prob_rat = prob_rat,
     bl_cent = bl_cent,
-    tr_cent = tr_cent
+    tr_cent = tr_cent,
+    tr_sub_cent = tr_sub_cent
   )
   return(data)
 }

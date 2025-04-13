@@ -15,6 +15,8 @@ path_to_rva <- "~/projects/RVA/"
 
 stan_model_dir<- paste0(path_to_project_directory,"code/stan_models/")
 model_out_dir <- paste0(path_to_project_directory,"output/results/stan_model_fits/")
+model_diags_dir <- paste0(path_to_project_directory,"output/diagnostics/")
+
 
 #load custom functions
 source(paste0(path_to_s22,"code/functions/fit_stan_model.R")) 
@@ -29,6 +31,7 @@ library(bayesplot)
 library(abind)
 library(sigmoid)
 library(posterior)
+library(bayestestR)
 ```
 
 Read in data, run through QC
@@ -69,7 +72,8 @@ trials <- add_sub_indices(trials) #add subject indices to the df. These will mat
 trials <- add_probe_number(trials,newcol="vrat_number",val_col="val_rat") #add valence rating number
 trials <- add_probe_number(trials,newcol="prat_number",val_col="prob_rat") #add probability rating number
 # Create mean-centered block and trial numbers
-trials <- mutate(trials, bl_cent = block - mean(block), tr_cent = trial_blk - mean(trial_blk)) 
+trials <- mutate(trials, bl_cent = block - mean(block), tr_cent = trial_blk - mean(trial_blk), 
+                 tr_sub_cent = trial_sub - mean(trial_sub)) 
 
 # Add fractal indexes
 trials <- trials %>% mutate(frac_ix = case_when(
@@ -127,51 +131,528 @@ prereg$diagnostics
 ```
 
 ```{r}
-view(filt_sum(prereg$sum,"mu"))
-view(filt_sum(prereg$sum,"sigma"))
+filt_sum(prereg$sum,"mu")
+filt_sum(prereg$sum,"sigma")
 ```
 
-Get r-sq for probability ratings
+Diagnostics are poor, and the parameter values suggests there's room for simplification.
+You'll need to do better than the preregistered model. Further review model diagnostics and results, identify
+a reasonable minimal model, fit it, and adjust/add from there. 
+
+Looking into Rhat more
 ```{r}
-pp_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("prob_pred"))
-ps_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("prob_sigma"))
-prob_rsq_prereg <- mcmc_rsq(pp_prereg,ps_prereg,print_plot=FALSE)
-prob_rsq_prereg$sum['median']
+prereg_rhat <- prereg$diagnostics$Rhat
+prereg_rhat[order(-prereg_rhat$rhat), ]
+filt_sum(prereg_rhat,"^w") # only weights
+filt_sum(prereg_rhat,"^[^w]") # everything but
 ```
+High r-hats for many subject-level intercepts, though not too high (largely < 1.1).
+Very high rhat for the mean effect of block, also high rhat for the block-level sigma and a number of subject-level
+effects (though the subject-level and sigma again aren't too bad, mostly < 1.1).
+The worst of it is the effect of reward, with a 1.2 rhat for the effect of the mean and the subject-level 
+effects all over the place (like half of them have high rhats).
+There's also one or two high r-hats for subject-level values of other valence predictors, though those shouldn't
+be a big concern at this stage.
+Alpha, forget, and gamma values shown signs of trouble, though not big ones. A secondary problem, probably
 
-Get r-sq for valence ratings
+To summarize...
+
+Major concerns:
+1. The worst of it is the effect of reward, with a 1.2 rhat for the effect of the mean and the subject-level effects all over the place (like half of them have high rhats).
+2. Very high rhat for the mean effect of block, also high rhat for the block-level sigma and a number of subject-level effects (though the subject-level and sigma again aren't too bad, mostly < 1.1).
+
+Smaller concerns:
+3. High r-hats for many subject-level intercepts, though not too high (largely < 1.1).
+4. Alpha, forget, and gamma values shown signs of trouble, though not big ones. A secondary problem, probably
+
+
 ```{r}
-vp_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("val_pred"))
-vss_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
-vs_prereg <- apply(vss_prereg,c(1,2,3),half_normal_mean)
-val_rsq_prereg <- mcmc_rsq(vp_prereg,vs_prereg,print_plot=FALSE)
-val_rsq_prereg$sum[['median']]
+prereg_ess <- prereg$diagnostics$ESS
+prereg_ess[order(prereg_ess$ess_bulk), ]
 ```
+ESS is kind of bad across the board, esp. for otherwise problematic paramaeters. 
 
-Get regression effects
+In general, I think the main cause for concern is the Rhats, with ESS and treedepth providing supporting info,
+and likely reflecting the same problems. So focus primarily on fixing Rhats.
+
+Doing this first through visual diagnostics
+
+First looking at traceplots for two offending parameters
 ```{r}
-prereg_eff <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("wx_mu"))
-create_interval_plot(arr = prereg_eff, xmin = -0.02, xmax = .01,names=c("wx_mu[3]","wx_mu[2]","wx_mu[1]"))
-mean(prereg_eff[,,"wx_mu[2]"] < prereg_eff[,,"wx_mu[3]"])
-quantile(prereg_eff[,,"wx_mu[2]"] - prereg_eff[,,"wx_mu[3]"],c(.025,.5,.975))
+wx_mu1 <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("wx_mu[1]"))
+mcmc_trace(wx_mu1)
 ```
 
 ```{r}
-set.seed(7)
-rew <- c(1,0)
-rpe <- c(0.71,-0.71)
-dvec_mat <- cbind(rew,rpe) #turn into matrix
+w_bl_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_bl_mu"))
+mcmc_trace(w_bl_mu)
+```
+Ok so there's no singular chain that's the offender it doesn't seem, things are just generally bad.
+
+Let's look at subject-level values for the effect of reward
+```{r}
+sub_level_wx1 <- filt_sum(prereg$sum,"wx_z\\[\\d+,1\\]$") # subject-level z scores
+sub_level_wx1_means <- sub_level_wx1$mean # just the subject means
+sub_level_wx1s <- sub_level_wx1_means*0.0056286284 + 0.0047753663 #use wx_mu and wx_sigma means to transform to raw scores
+hist(sub_level_wx1s)
+```
+Really weird/non-normal shape
+But then you checked the data from RVA 2, and found something similar. So this isn't necessarily an issue I guess.
 
 
-eff_dims <- abind(prereg_eff[,,c("wx_mu[1]")],prereg_eff[,,c("wx_mu[2]")] - prereg_eff[,,c("wx_mu[3]")],along=3)
-vec_ws_prereg <- apply(eff_dims,c(1,2),vec_optim,dvec=dvec_mat,init_pars=c(0,0)) #get vector weights
+Let's look for problematic geometries in the pairs plots, starting by looking at all pairs of group-level params.
+```{r}
+wx_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("wx_mu"))
+wx_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("wx_sigma"))
+w_0_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_0_mu"))
+w_0_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_0_sigma"))
+w_tr_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_tr_mu"))
+w_tr_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_tr_sigma"))
+w_bl_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_bl_mu"))
+w_bl_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_bl_sigma"))
 
-vec_ws_prereg_org <- aperm(vec_ws_prereg,c(2,3,1)) #rearrange dimensions
-dimnames(vec_ws_prereg_org)[[3]] <- c("rew","rpe") #name appropriately
-create_interval_plot(vec_ws_prereg_org,names = c("rpe","rew"),xmin = -.012, xmax = .01)
-median(vec_ws_prereg_org[,,"rew"])
-median(vec_ws_prereg_org[,,"rpe"])
+alpha_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("alpha_mu"))
+alpha_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("alpha_sigma"))
+forget_cns_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("forget_cns_mu"))
+forget_cns_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("forget_cns_sigma"))
+forget_rns_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("forget_rns_mu"))
+forget_rns_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("forget_rns_sigma"))
+gamma_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("gamma_mu"))
+gamma_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("gamma_sigma"))
+prob_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("prob_sigma"))
+val_sigma_sigma <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
+
+
+mu_sigma <- abind(wx_mu,wx_sigma,w_0_mu,w_0_sigma,w_tr_mu,w_tr_sigma,w_bl_mu,w_bl_sigma,alpha_mu,alpha_sigma,
+                  forget_cns_mu,forget_cns_sigma,forget_rns_mu,forget_rns_sigma,gamma_mu,gamma_sigma,
+                  prob_sigma,val_sigma_sigma,along=3)
+mu_sigma_pair <- mcmc_pairs(mu_sigma)
+ggsave(paste0(model_diags_dir,"prereg_pairs_mu_sigma.pdf"),mu_sigma_pair,width=40,height=40,device="pdf")
+
+```
+Re wx_mu[1], nothing jumps out as being especially bad, except it's got a somewhat weird relationship with wx_sigma[1],
+and a slightly weird relationship with w_bl_mu.
+Re w_bl_mu, again, slightly weird relationship with wx_mu. No other issues really. Maybe a little concerning issue
+with w_tr_mu and w_0_mu but not too bad. I also noticed some somewhat weird shapes related to w_tr_mu but again not too bad.
+If there's room for simplification with the nuisance parameter structure, prob you should do that.
+Alpha, forget_cns, forget_rns mostly fine, but with slight signs of trouble with relationship to valence predictors
+forget_rns_mu and sigma also have positive correlation 
+
+Now, let's look at the results. We'll start by looking at how the nuisance parameter strucutre might be simplified
+
+```{r}
+w_bl_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_bl_mu"))
+w_tr_mu <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("w_tr_mu"))
+quantile(w_bl_mu - w_tr_mu*48,c(.025,.50,.975))
+mean(w_bl_mu < w_tr_mu*48)
+```
+Neither effect is very big, and there's not strong evidence that you need to separate block and trial, so I
+think it makes sense to combine them into overall trial.
+
+Now let's explore the results a bit further.
+```{r}
+filt_sum(prereg$sum,"mu|sigma")
 ```
 
+The forgetting rates look weird: their means are both near 1 yet they have huge variance
+```{r}
+forget_rns_ncp <- ncp_mean_hist(prereg$sum,"forget_rns",sigmoid=T)
+forget_cns_ncp <- ncp_mean_hist(prereg$sum,"forget_cns",sigmoid=T)
+gamma_ncp <- ncp_mean_hist(prereg$sum,"gamma",sigmoid=T)
+```
+Ok, so for both, the distribution is long-tailed. For cns, it might even be bi-modal, with some people forgetting
+on cue-not-shown entirely. 
+
+```{r}
+gamma_ncp <- ncp_mean_hist(prereg$sum,"gamma",sigmoid=T)
+alpha_ncp <- ncp_mean_hist(prereg$sum,"alpha",sigmoid=T)
+```
+These are a bit more normal.
+
+Altogether, it seems like the first thing to do is to try simplifying the nuisance parameter structure.
+Fit a model where block and trial are combined into one nuisance parameter, and log likelihood is calculated.
+Also refit the original model with log likelihood calculation for comparison purposes.
+Maybe simplifying the nuisance parameter structure will fix things, but I doubt it. Assuming it doesn't, the
+next step will be to cut down to one forgetting rate in the winning model. Try it two ways, simultaneously, 
+and see which way fits best: have the forgetting rate only apply when the cue isn't shown, and have it apply
+both when the cue isn't shown and the reward isn't shown.
+
+```{r}
+prereg_loglik <- fit_stan_model(stan_file=paste0(stan_model_dir,"prereg_loglik.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva3")
+```
+
+```{r}
+combine_bltr <- fit_stan_model(stan_file=paste0(stan_model_dir,"combine_bltr.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva3")
+```
+
+```{r}
+combine_bltr$diagnostics
+fsml_compare(prereg_loglik,combine_bltr)
+```
+The diagnostics didn't really improve, and the model with both block and trial predictors fits much better. So
+keep both predictors.
+
+Now try using just one forgetting rate
+```{r}
+forget_cns_only <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_only.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva3")
+```
+
+```{r}
+forget_combined <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+forget_cns_only$diagnostics$Rhat
+```
+
+```{r}
+fsml_compare(forget_cns_only,forget_combined)
+fsml_compare(forget_combined,prereg_loglik)
+fsml_compare(forget_cns_only,prereg_loglik)
+```
+
+Forget combined fits significantly better than forget, and even a little better than prereg despite being simpler.
+
+```{r}
+forget_cns_only$diagnostics$Rhat
+forget_combined$diagnostics$Rhat
+```
+
+But its diagnostics are worse. I'm not sure what to do here, so I'll keep fitting both for the time being.
+
+Just to try and see, I'll switch the residual structure for valence ratings.
+```{r}
+forget_combined_zscores <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_zscores.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+forget_cns_zscores <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_zscores.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+view(filt_sum(forget_combined_zscores$sum,"mu|sigma"))
+```
+
+```{r}
+view(filt_sum(forget_cns_zscores$sum,"mu|sigma"))
+```
+This improves the diagnostics, but meaningfully changes the results. Since the likelihood of these models is
+clearly less appropriate than that of the original models, and since this change would lead these models to diverge
+from the previous study's models and likely require changes to all models, it's best you don't make this 
+change.
+
+What if we combine block and trial in the cns only model? Does that get us all the way there?
+```{r}
+forget_cns_cbltr <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_cbltr.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+fsml_compare(forget_cns_cbltr,forget_cns_only)
+```
+
+No this doesn't really do anything and makes the model fit worse. That's the second time you've found that 
+combining block and trial regressors has that effect. So forget about this simplification, for now at least.
+
+So the way things currently stand, it appears you'll want to use some variant of a single-forget-parameter model, 
+but that some further work is needed to make the model fit better still.
+
+I wonder if the priors are appropriate
+```{r}
+view(filt_sum(forget_combined$sum,"mu|sigma"))
+view(filt_sum(prereg_loglik$sum,"mu|sigma"))
+```
+
+Most of the priors look fine, but the forgetting parameter sigmas are too small.
+Let's trying setting them higher (with a Wider Forgetting Sigma Prior)
+```{r}
+forget_cns_wfsp <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_wfsp.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva3")
+```
+
+```{r}
+forget_combined_wfsp <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_wfsp.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+prereg_wfsp <- fit_stan_model(stan_file=paste0(stan_model_dir,"prereg_wfsp.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   study = "rva3")
+```
+
+```{r}
+forget_cns_wfsp$diagnostics$Rhat
+```
+Worse Rhats
+
+```{r}
+forget_combined_wfsp$diagnostics$Rhat
+```
+Worse
+
+```{r}
+prereg_wfsp$diagnostics$Rhat
+```
+Better. Go figure.
+
+```{r}
+fsml_compare(prereg_wfsp,forget_combined_wfsp,forget_cns_wfsp)
+```
+Similar ordering
+```{r}
+fsml_compare(prereg_wfsp,prereg_loglik,forget_combined_wfsp,forget_combined,forget_cns_wfsp,forget_cns_only)
+```
+
+Ok, so the widened priors leads to pretty much the same fit, though consistently marginally better with the 
+original priors.
+
+Reveiwing results
+```{r}
+view(filt_sum(prereg_wfsp$sum,"mu|sigma"))
+view(filt_sum(prereg_loglik$sum,"mu|sigma"))
+```
+
+```{r}
+view(filt_sum(forget_combined_wfsp$sum,"mu|sigma"))
+view(filt_sum(forget_combined$sum,"mu|sigma"))
+```
+
+```{r}
+view(filt_sum(forget_cns_wfsp$sum,"mu|sigma"))
+view(filt_sum(forget_cns_only$sum,"mu|sigma"))
+```
+
+It appears that the values for forget_cns change quite a bit with the wider priors, but the values for other
+forgetting parameters don't. Altogether, I'm not inclined to keep the wider priors on forgetting. I think it's
+questionable whether these make sense given the inverse_logit transform, and for the models with simplified
+forgetting - which are the ones you probably want to use - it worsens diagnostics and fails to improve fits.
+
+Can simply adding more iterations improve high rhats?
+```{r}
+forget_cns_only <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_only.stan"),
+                                   model_out_dir=model_out_dir,
+                                   raw_data=trials,
+                                   iter_warmup = 1500,
+                                   iter_sampling = 1500,
+                                   study = "rva3")
+```
+
+```{r}
+forget_cns_only$diagnostics
+```
+
+Yes, that does help. Increasing iterations appears to be enough to get forget_cns_only all the way there.
+Now let's try doing the same thing with forget_combined.
+```{r}
+forget_combined <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  iter_warmup = 2000,
+                                  iter_sampling = 2000,
+                                  study = "rva3")
+```
+
+I'll also try tightening the priors conservatively, to see if this helps the model fit better
+```{r}
+forget_combined_tightp <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_tightp.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  iter_warmup = 2000,
+                                  iter_sampling = 2000,
+                                  study = "rva3")
+```
+
+
+```{r}
+forget_combined$diagnostics
+```
+Adding more iterations did the trick.
+
+```{r}
+view(filt_sum(forget_combined$sum,"mu|sigma"))
+```
+Results are basically still the same.
+
+```{r}
+forget_combined_tightp$diagnostics
+```
+
+```{r}
+view(filt_sum(forget_combined_tightp$sum,"mu|sigma"))
+```
+All looks about the same here, little better ESS with tightp though I'm not sure that it made a real difference.
+
+```{r}
+fsml_compare(forget_combined_tightp,forget_combined)
+```
+Interesting that not tightening the priors leads to a better fit. I say forget about that change and stick with
+forget_combined.
+
+```{r}
+wx_mu1_fc <- get_draws("forget_combined_vresid",vars=c("wx_mu[1]"),model_out_dir=model_out_dir)
+wx_mu2 <- get_draws("forget_combined_vresid",vars=c("wx_mu[2]"),model_out_dir=model_out_dir)
+quantile(wx_mu2,c(.025,.50,.975))
+mean(wx_mu2 > 0)
+wx_mu3 <- get_draws("forget_combined_vresid",vars=c("wx_mu[3]"),model_out_dir=model_out_dir)
+quantile(wx_mu3 - wx_mu2,c(.025,.50,.975))
+mean(wx_mu3 - wx_mu2 > 0)
+
+wx_mu5 <- get_draws("forget_combined_vresid",vars=c("wx_mu[5]"),model_out_dir=model_out_dir)
+quantile(wx_mu5 - wx_mu2,c(.025,.50,.975))
+mean(wx_mu5 - wx_mu2 > 0)
+
+wx_mu6 <- get_draws("forget_combined_vresid",vars=c("wx_mu[6]"),model_out_dir=model_out_dir)
+quantile(wx_mu6 - wx_mu3,c(.025,.50,.975))
+mean(wx_mu6 - wx_mu3 > 0)
+
+```
+
+```{r}
+fc_eff_int <- get_draws("forget_combined",vars=c("wx_mu[1]","wx_mu[2]","wx_mu[3]"),model_out_dir=model_out_dir)
+fc_eff_int <- fc_eff_int*100
+create_interval_plot(arr = fc_eff_int, xmin = -0.01, xmax = .6,names=c("wx_mu[3]",
+                                                                     "wx_mu[2]","wx_mu[1]"))
+```
+
+Let's try adding V_resid to this model, since this should probably be included in the final model. 
+```{r}
+forget_combined_vresid <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_vresid.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  iter_warmup = 2000,
+                                  iter_sampling = 2000,
+                                  study = "rva3")
+```
+
+```{r}
+view(filt_sum(forget_combined_vresid$sum,"mu|sigma"))
+```
+
+
+```{r}
+forget_combined_vresid$diagnostics
+```
+
+```{r}
+fsml_compare(forget_combined,forget_combined_vresid)
+```
+
+```{r}
+wx_mu1 <- get_draws("forget_combined_vresid",vars=c("wx_mu[1]"),model_out_dir=model_out_dir)
+wx_mu2 <- get_draws("forget_combined_vresid",vars=c("wx_mu[2]"),model_out_dir=model_out_dir)
+quantile(wx_mu2,c(.025,.50,.975))
+mean(wx_mu2 > 0)
+wx_mu3 <- get_draws("forget_combined_vresid",vars=c("wx_mu[3]"),model_out_dir=model_out_dir)
+quantile(wx_mu3 - wx_mu2,c(.025,.50,.975))
+mean(wx_mu3 - wx_mu2 > 0)
+
+wx_mu5 <- get_draws("forget_combined_vresid",vars=c("wx_mu[5]"),model_out_dir=model_out_dir)
+quantile(wx_mu5 - wx_mu2,c(.025,.50,.975))
+mean(wx_mu5 - wx_mu2 > 0)
+
+wx_mu6 <- get_draws("forget_combined_vresid",vars=c("wx_mu[6]"),model_out_dir=model_out_dir)
+quantile(wx_mu6 - wx_mu3,c(.025,.50,.975))
+mean(wx_mu6 - wx_mu3 > 0)
+
+```
+
+```{r}
+eff_int <- abind(wx_mu1,wx_mu2,wx_mu3,wx_mu5,wx_mu6,along = 3)*100 # Effects of interest, all in one array
+create_interval_plot(arr = eff_int, xmin = -0.01, xmax = .6,names=c("wx_mu[6]","wx_mu[5]","wx_mu[3]",
+                                                                     "wx_mu[2]","wx_mu[1]"))
+```
+```{r}
+pe_vec_est <- (wx_mu3 - wx_mu2)*sqrt(2)*100
+pe_vec_est[pe_vec_est < 0] <- 0
+rew_vec_est <- (wx_mu1-(wx_mu3 - wx_mu2))*100
+quantile(rew_vec_est,c(.025,.50,.975))
+quantile(pe_vec_est,c(.025,.50,.975))
+quantile(rew_vec_est/pe_vec_est,c(.025,.50,.975))
+```
+
+```{r}
+# Get r-sq for probability ratings
+pp_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("prob_pred"))
+ps_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("prob_sigma"))
+prob_rsq_fcv <- mcmc_rsq(pp_fcv,ps_fcv,print_plot=FALSE)
+prob_rsq_fcv$sum['median']
+
+# Get *rough* r-sq for valence ratings
+vp_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("val_pred"))
+vss_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
+vs_fcv <- apply(vss_fcv,c(1,2,3),half_normal_mean)
+val_rsq_fcv <- mcmc_rsq(vp_fcv,vs_fcv,print_plot=FALSE)
+val_rsq_fcv$sum[['median']]
+```
+
+Reserve code
+```{r}
+# wx_mu2 <- get_draws("forget_combined",vars=c("wx_mu[2]"),model_out_dir=model_out_dir)
+# quantile(wx_mu2,c(.025,.50,.975))
+# mean(wx_mu2 > 0)
+# wx_mu3 <- get_draws("forget_combined",vars=c("wx_mu[3]"),model_out_dir=model_out_dir)
+# quantile(wx_mu3 - wx_mu2,c(.025,.50,.975))
+# mean(wx_mu3 - wx_mu2 > 0)
+# # Get r-sq for probability ratings
+# pp_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("prob_pred"))
+# ps_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("prob_sigma"))
+# prob_rsq_prereg <- mcmc_rsq(pp_prereg,ps_prereg,print_plot=FALSE)
+# prob_rsq_prereg$sum['median']
+# 
+# # Get r-sq for valence ratings
+# vp_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("val_pred"))
+# vss_prereg <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("val_sigma_sigma"))
+# vs_prereg <- apply(vss_prereg,c(1,2,3),half_normal_mean)
+# val_rsq_prereg <- mcmc_rsq(vp_prereg,vs_prereg,print_plot=FALSE)
+# val_rsq_prereg$sum[['median']]
+# 
+# # Get regression effects
+# prereg_eff <- get_draws("prereg_rva3",model_out_dir=model_out_dir,vars=c("wx_mu"))
+# create_interval_plot(arr = prereg_eff, xmin = -0.02, xmax = .01,names=c("wx_mu[3]","wx_mu[2]","wx_mu[1]"))
+# mean(prereg_eff[,,"wx_mu[2]"] < prereg_eff[,,"wx_mu[3]"])
+# quantile(prereg_eff[,,"wx_mu[2]"] - prereg_eff[,,"wx_mu[3]"],c(.025,.5,.975))
+# 
+# # Vector fits
+# set.seed(7)
+# rew <- c(1,0)
+# rpe <- c(0.71,-0.71)
+# dvec_mat <- cbind(rew,rpe) #turn into matrix
+# 
+# 
+# eff_dims <- abind(prereg_eff[,,c("wx_mu[1]")],prereg_eff[,,c("wx_mu[2]")] - prereg_eff[,,c("wx_mu[3]")],along=3)
+# vec_ws_prereg <- apply(eff_dims,c(1,2),vec_optim,dvec=dvec_mat,init_pars=c(0,0)) #get vector weights
+# 
+# vec_ws_prereg_org <- aperm(vec_ws_prereg,c(2,3,1)) #rearrange dimensions
+# dimnames(vec_ws_prereg_org)[[3]] <- c("rew","rpe") #name appropriately
+# create_interval_plot(vec_ws_prereg_org,names = c("rpe","rew"),xmin = -.012, xmax = .01)
+# median(vec_ws_prereg_org[,,"rew"])
+# median(vec_ws_prereg_org[,,"rpe"])
+```
 
 
