@@ -71,9 +71,12 @@ Data transformations
 trials <- add_sub_indices(trials) #add subject indices to the df. These will match the indices used in Stan.
 trials <- add_probe_number(trials,newcol="vrat_number",val_col="val_rat") #add valence rating number
 trials <- add_probe_number(trials,newcol="prat_number",val_col="prob_rat") #add probability rating number
-# Create mean-centered block and trial numbers
+# Create mean-centered block, trial, and previous valence rating 
 trials <- mutate(trials, bl_cent = block - mean(block), tr_cent = trial_blk - mean(trial_blk), 
-                 tr_sub_cent = trial_sub - mean(trial_sub)) 
+                         tr_sub_cent = trial_sub - mean(trial_sub), 
+                         prev_vrat_cent = prev_rate - mean(prev_rate,na.rm=T)) 
+
+
 
 # Add fractal indexes
 trials <- trials %>% mutate(frac_ix = case_when(
@@ -545,8 +548,8 @@ Let's try adding V_resid to this model, since this should probably be included i
 forget_combined_vresid <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_vresid.stan"),
                                   model_out_dir=model_out_dir,
                                   raw_data=trials,
-                                  iter_warmup = 2000,
-                                  iter_sampling = 2000,
+                                  iter_warmup = 3000,
+                                  iter_sampling = 5000,
                                   study = "rva3")
 ```
 
@@ -596,6 +599,7 @@ quantile(pe_vec_est,c(.025,.50,.975))
 quantile(rew_vec_est/pe_vec_est,c(.025,.50,.975))
 ```
 
+Initial, rough rsq calculations
 ```{r}
 # Get r-sq for probability ratings
 pp_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("prob_pred"))
@@ -610,6 +614,48 @@ vs_fcv <- apply(vss_fcv,c(1,2,3),half_normal_mean)
 val_rsq_fcv <- mcmc_rsq(vp_fcv,vs_fcv,print_plot=FALSE)
 val_rsq_fcv$sum[['median']]
 ```
+
+Calculating r-squared properly
+```{r}
+prob_pred_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("prob_pred"))
+prob_sigma_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("prob_sigma"))
+prob_resid_var_fcv <- get_trunc_norm_var_3darray(prob_pred_fcv,prob_sigma_fcv,0,1)
+prob_rsq_fcv <- mcmc_rsq(prob_pred_fcv,prob_resid_var_fcv,sd=FALSE,print_plot=FALSE)
+cat(paste0("Probability ratings r-sq: ",prob_rsq_fcv$sum$mean,"\n\n"))
+```
+
+```{r}
+val_pred_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("val_pred"))
+val_sigma_fcv <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("val_sigma_ss"))
+val_resid_var_fcv <- get_trunc_norm_var_3darray(val_pred_fcv,val_sigma_fcv,0,1)
+val_rsq_fcv <- mcmc_rsq(val_pred_fcv,val_resid_var_fcv,sd=FALSE,print_plot=FALSE)
+cat(paste0("Valence ratings r-sq: ",val_rsq_fcv$sum$mean))
+```
+
+# Testing whether the decaying effects formulation is necessary
+
+Running a version of forget_combined_vresid that predicts valence ratings using only the values of variables 
+(e.g., reward) on the current trial, as in Studies 1 and 2 - not allowing variables to have effects that linger
+and decay across trials.
+```{r}
+fcv_no_decay <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_no_decay.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+fcv_1000draws <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_1000draws.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+For comparison, running forget_combined_vresid for the standard 1000 draws
+```{r}
+fsml_compare(fcv_no_decay,fcv_1000draws)
+```
+It fits far better with decaying effects.
 
 Reserve code
 ```{r}

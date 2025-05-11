@@ -32,6 +32,7 @@ stan_data_rva3 <- function(trials,n_t){
   prob_rat_trials <- filter(trials,prat_number != 0)
   prob_rat <- prob_rat_trials$prob_rat
   
+  prev_vrat_cent <- sub_by_trial_vec_list(trials,"prev_vrat_cent") #previous valence rating
 
   data <- list(
     n_t = n_t,
@@ -50,7 +51,8 @@ stan_data_rva3 <- function(trials,n_t){
     prob_rat = prob_rat,
     bl_cent = bl_cent,
     tr_cent = tr_cent,
-    tr_sub_cent = tr_sub_cent
+    tr_sub_cent = tr_sub_cent,
+    prev_vrat_cent = prev_vrat_cent
   )
   return(data)
 }
