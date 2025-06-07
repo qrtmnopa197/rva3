@@ -102,7 +102,6 @@ sum(sig_emot == "Yes")/nrow(subs)
 ```{r}
 subs$age <- as.numeric(subs$age)
 mean(subs$age,na.rm=T)
-median(subs$age,na.rm=T)
 sd(subs$age,na.rm=T)
 ```
 
@@ -272,6 +271,17 @@ alpha_ncp <- ncp_mean_hist(prereg$sum,"alpha",sigmoid=T)
 ```
 These are a bit more normal.
 
+
+Now looking at the full posterior for the forgetting rates
+```{r}
+forget_cns_preregll <- sigmoid(get_draws("prereg_loglik",model_out_dir=model_out_dir,vars=c("forget_cns_mu")))
+forget_rns_preregll <- sigmoid(get_draws("prereg_loglik",model_out_dir=model_out_dir,vars=c("forget_rns_mu")))
+get_ci_pd(draws=forget_rns_preregll)
+
+diff_forget <- forget_rns_preregll - forget_cns_preregll
+get_ci_pd(draws=diff_forget,round=2)
+```
+
 Altogether, it seems like the first thing to do is to try simplifying the nuisance parameter structure.
 Fit a model where block and trial are combined into one nuisance parameter, and log likelihood is calculated.
 Also refit the original model with log likelihood calculation for comparison purposes.
@@ -303,34 +313,32 @@ keep both predictors.
 
 Now try using just one forgetting rate
 ```{r}
-forget_cns_only <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_only.stan"),
+forget_cns_only_1000 <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_only_1000.stan"),
                                    model_out_dir=model_out_dir,
                                    raw_data=trials,
                                    study = "rva3")
 ```
 
 ```{r}
-forget_combined <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined.stan"),
+forget_combined_1000 <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_1000.stan"),
                                   model_out_dir=model_out_dir,
                                   raw_data=trials,
                                   study = "rva3")
 ```
 
 ```{r}
-forget_cns_only$diagnostics$Rhat
+forget_cns_only_1000$diagnostics$Rhat
 ```
 
 ```{r}
-fsml_compare(forget_cns_only,forget_combined)
-fsml_compare(forget_combined,prereg_loglik)
-fsml_compare(forget_cns_only,prereg_loglik)
+fsml_compare(forget_cns_only_1000,forget_combined_1000,prereg_loglik)
 ```
 
 Forget combined fits significantly better than forget, and even a little better than prereg despite being simpler.
 
 ```{r}
-forget_cns_only$diagnostics$Rhat
-forget_combined$diagnostics$Rhat
+forget_cns_only_1000$diagnostics$Rhat
+forget_combined_1000$diagnostics$Rhat
 ```
 
 But its diagnostics are worse. I'm not sure what to do here, so I'll keep fitting both for the time being.
@@ -371,7 +379,7 @@ forget_cns_cbltr <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_cns_c
 ```
 
 ```{r}
-fsml_compare(forget_cns_cbltr,forget_cns_only)
+fsml_compare(forget_cns_cbltr,forget_cns_only_1000)
 ```
 
 No this doesn't really do anything and makes the model fit worse. That's the second time you've found that 
@@ -382,7 +390,7 @@ but that some further work is needed to make the model fit better still.
 
 I wonder if the priors are appropriate
 ```{r}
-view(filt_sum(forget_combined$sum,"mu|sigma"))
+view(filt_sum(forget_combined_1000$sum,"mu|sigma"))
 view(filt_sum(prereg_loglik$sum,"mu|sigma"))
 ```
 
@@ -429,7 +437,7 @@ fsml_compare(prereg_wfsp,forget_combined_wfsp,forget_cns_wfsp)
 ```
 Similar ordering
 ```{r}
-fsml_compare(prereg_wfsp,prereg_loglik,forget_combined_wfsp,forget_combined,forget_cns_wfsp,forget_cns_only)
+fsml_compare(prereg_wfsp,prereg_loglik,forget_combined_wfsp,forget_combined_1000,forget_cns_wfsp,forget_cns_only_1000)
 ```
 
 Ok, so the widened priors leads to pretty much the same fit, though consistently marginally better with the 
@@ -443,12 +451,12 @@ view(filt_sum(prereg_loglik$sum,"mu|sigma"))
 
 ```{r}
 view(filt_sum(forget_combined_wfsp$sum,"mu|sigma"))
-view(filt_sum(forget_combined$sum,"mu|sigma"))
+view(filt_sum(forget_combined_1000$sum,"mu|sigma"))
 ```
 
 ```{r}
 view(filt_sum(forget_cns_wfsp$sum,"mu|sigma"))
-view(filt_sum(forget_cns_only$sum,"mu|sigma"))
+view(filt_sum(forget_cns_only_1000$sum,"mu|sigma"))
 ```
 
 It appears that the values for forget_cns change quite a bit with the wider priors, but the values for other
@@ -632,6 +640,73 @@ val_rsq_fcv <- mcmc_rsq(val_pred_fcv,val_resid_var_fcv,sd=FALSE,print_plot=FALSE
 cat(paste0("Valence ratings r-sq: ",val_rsq_fcv$sum$mean))
 ```
 
+# Get main parameter estimates
+```{r}
+b_r_draws <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("wx_mu[1]"))
+b_v_d_draws <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("wx_mu[2]"))
+b_v_nd_draws <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("wx_mu[3]"))
+b_vres_d_draws <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("wx_mu[5]"))
+b_vres_nd_draws <- get_draws("forget_combined_vresid",model_out_dir=model_out_dir,vars=c("wx_mu[6]"))
+
+cat("b[r]\n")
+get_ci_pd(draws=b_r_draws,scale=200)
+
+cat("b[V_d]\n")
+get_ci_pd(draws=b_v_d_draws,scale=200,round=6)
+
+r_vd_draws <- b_r_draws-b_v_d_draws
+cat("b[r] - b[V_d]\n")
+get_ci_pd(draws=r_vd_draws,scale=200)
+
+cat("b[Vres_d]\n")
+get_ci_pd(draws=b_vres_d_draws,scale=200)
+
+vresd_vd_draws <- b_vres_d_draws-b_v_d_draws
+cat("b[Vres_d] - b[V_d]\n")
+get_ci_pd(draws=vresd_vd_draws,scale=200)
+
+vnd_vd_draws <- b_v_nd_draws-b_v_d_draws
+cat("b[V_nd] - b[V_d]\n")
+get_ci_pd(draws=vnd_vd_draws,scale=200)
+
+r_vdiff_draws <- b_r_draws-vnd_vd_draws
+cat("b[r] - (b[V_nd]-b[V_d])\n")
+get_ci_pd(draws=r_vdiff_draws,scale=200)
+
+vresnd_vresd_draws <- b_vres_nd_draws-b_vres_d_draws
+cat("b[Vres_nd] - b[Vres_d]\n")
+get_ci_pd(draws=vresnd_vresd_draws,scale=200)
+
+r_vresdiff_draws <- b_r_draws-vresnd_vresd_draws
+cat("b[r] - (b[Vres_nd]-b[Vres_d])\n")
+get_ci_pd(draws=r_vresdiff_draws,scale=200)
+```
+
+# Create effect figure
+
+```{r}
+raw_effs <- get_draws("forget_combined_vresid",vars=c("wx_mu[6]","wx_mu[5]","wx_mu[3]","wx_mu[2]","wx_mu[1]"),model_out_dir=model_out_dir)
+raw_eff_intervals <- create_interval_plot(arr = raw_effs, names = c("wx_mu[6]","wx_mu[5]","wx_mu[3]","wx_mu[2]","wx_mu[1]"), 
+                                         color_mapping = c("wx_mu[1]" = "#414141",
+                                                           "wx_mu[2]" = "#414141",
+                                                           "wx_mu[3]" = "#414141",
+                                                           "wx_mu[5]" = "#414141",
+                                                           "wx_mu[6]" = "#414141",
+                                                           "wx_mu[1]_med" = "black",
+                                                           "wx_mu[2]_med" = "black",
+                                                           "wx_mu[3]_med" = "black",
+                                                           "wx_mu[5]_med" = "black",
+                                                           "wx_mu[6]_med" = "black"),
+                                         xmin = -.00001, xmax = .006,
+                                         dot_size = 3,
+                                         scale = .47) +
+                     theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = .47),
+                         panel.background = element_rect(fill = "white", color = NA),
+                         #axis.text.x = element_blank(),
+                         axis.text.y=element_blank())
+ggsave("~/Documents/manuscripts/rva/figures_tables/fig_2/s3_effs_raw.pdf",raw_eff_intervals,width=4,height=3)
+```
+
 # Testing whether the decaying effects formulation is necessary
 
 Running a version of forget_combined_vresid that predicts valence ratings using only the values of variables 
@@ -656,6 +731,31 @@ For comparison, running forget_combined_vresid for the standard 1000 draws
 fsml_compare(fcv_no_decay,fcv_1000draws)
 ```
 It fits far better with decaying effects.
+
+
+# Parameter estimate table
+
+Create a table of parameter estimates from the final model (this table is included in the supplement).
+```{r}
+# Get info on the posterior distribution for all relevant parameters
+mu_table <- select(filt_sum(forget_combined_vresid$sum,"mu"),variable,median,q5,q95)
+mu_table[2,3,4] <- as.numeric(mu_table[2,3,4])
+
+mu_table[c(1,2,12),2:4] <- sigmoid(mu_table[c(1,2,12),2:4]) # Transform learning and forgetting rate to original scale
+mu_table[c(6,7,8,10,11),2:4] <- mu_table[c(6,7,8,10,11),2:4]*200 # Multiply effects in units of points by 100
+
+mu_table[-5,c("median","q5","q95")] <- round(mu_table[-5,c("median","q5","q95")],2)
+mu_table[5,c("median","q5","q95")] <- round(mu_table[5,c("median","q5","q95")],3)
+
+#write.csv(mu_table,paste0(fig_dir,"params_tab_s2.csv")) #this CSV will be converted into a figure
+write.csv(mu_table,"~/Documents/manuscripts/rva/figures_tables/param_tabs/params_tab_s3.csv")
+```
+
+
+
+
+
+
 
 Reserve code
 ```{r}
@@ -701,4 +801,27 @@ Reserve code
 # median(vec_ws_prereg_org[,,"rpe"])
 ```
 
+```{r}
+prereg_eff <- get_draws("prereg_loglik",model_out_dir=model_out_dir,vars=c("wx_mu[1]","wx_mu[2]","wx_mu[3]"))
+# Vector fits
+set.seed(7)
+rew <- c(1,0)
+rpe <- c(0.5,-0.5)
+dvec_mat <- cbind(rew,rpe) #turn into matrix
+
+
+eff_dims <- abind(prereg_eff[,,c("wx_mu[1]")],prereg_eff[,,c("wx_mu[2]")] - prereg_eff[,,c("wx_mu[3]")],along=3)
+vec_ws_prereg <- apply(eff_dims,c(1,2),vec_optim,dvec=dvec_mat,init_pars=c(0,0)) #get vector weights
+
+vec_ws_prereg_org <- aperm(vec_ws_prereg,c(2,3,1)) #rearrange dimensions
+dimnames(vec_ws_prereg_org)[[3]] <- c("rew","rpe") #name appropriately
+
+cat("rew_vec\n")
+get_ci_pd(draws = vec_ws_prereg_org[,,"rew"],scale=200)
+cat("rpe_vec\n")
+get_ci_pd(draws = vec_ws_prereg_org[,,"rpe"],scale=200)
+cat("diff_vec\n")
+diff <- vec_ws_prereg_org[,,"rew"] - vec_ws_prereg_org[,,"rpe"]
+get_ci_pd(draws=diff,scale=200)
+```
 
