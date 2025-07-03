@@ -733,24 +733,43 @@ fsml_compare(fcv_no_decay,fcv_1000draws)
 It fits far better with decaying effects.
 
 
-# Parameter estimate table
-
-Create a table of parameter estimates from the final model (this table is included in the supplement).
+# Posterior distributions for population-level parameters
 ```{r}
-# Get info on the posterior distribution for all relevant parameters
+fig_dir <- "/Users/dp/Documents/manuscripts/rva/figures_tables/supp_tab_4/"
+```
+
+Create a CSV with estimated population means for model parameters
+```{r}
+# Get posterior population means for relevant parameters
 mu_table <- select(filt_sum(forget_combined_vresid$sum,"mu"),variable,median,q5,q95)
 mu_table[2,3,4] <- as.numeric(mu_table[2,3,4])
 
-mu_table[c(1,2,12),2:4] <- sigmoid(mu_table[c(1,2,12),2:4]) # Transform learning and forgetting rate to original scale
-mu_table[c(6,7,8,10,11),2:4] <- mu_table[c(6,7,8,10,11),2:4]*200 # Multiply effects in units of points by 100
+mu_table[c(6,7,8,10,11),2:4] <- mu_table[c(6,7,8,10,11),2:4]*200 # Re-scale effects on the points scale to the 0-1 scale (see Methods)
 
 mu_table[-5,c("median","q5","q95")] <- round(mu_table[-5,c("median","q5","q95")],2)
 mu_table[5,c("median","q5","q95")] <- round(mu_table[5,c("median","q5","q95")],3)
 
-#write.csv(mu_table,paste0(fig_dir,"params_tab_s2.csv")) #this CSV will be converted into a figure
-write.csv(mu_table,"~/Documents/manuscripts/rva/figures_tables/param_tabs/params_tab_s3.csv")
+write.csv(mu_table,paste0(fig_dir,"mu_table_s3.csv")) 
 ```
 
+Create a CSV with estimated population SDs for model parameters
+```{r}
+# Get posterior population SDs for relevant parameters
+sigma_table <- select(filt_sum(forget_combined_vresid$sum,"sigma"),variable,median,q5,q95) %>% 
+                  filter(!str_starts(variable, "prob_sigma") &
+                         !str_starts(variable, "val_sigma"))
+
+sigma_table[2,3,4] <- as.numeric(sigma_table[2,3,4])
+
+sigma_table[c(6,7,8,10,11),2:4] <- sigma_table[c(6,7,8,10,11),2:4]*200 # Re-scale effects on the points scale to the 0-1 scale (see Methods)
+
+sigma_table[-5,c("median","q5","q95")] <- round(sigma_table[-5,c("median","q5","q95")],2)
+sigma_table[5,c("median","q5","q95")] <- round(sigma_table[5,c("median","q5","q95")],3)
+
+write.csv(sigma_table,paste0(fig_dir,"sigma_table_s3.csv")) 
+```
+
+These CSVs were used to create Supplementary Table 4.
 
 
 
