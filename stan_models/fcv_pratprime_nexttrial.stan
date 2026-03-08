@@ -109,7 +109,7 @@ transformed parameters {
     x_preds[,,4] = rew_hid;
     
     // Probability ratings (mean-centered) for priming effects on valence
-    array[n_s] matrix[n_t,1] pr_preds = rep_array(rep_matrix(0,n_t,1),n_s);
+    array[n_s] vector[n_t] pr_preds = rep_array(rep_vector(0,n_t),n_s);
   
     // Get subject-specific values based on non-centered parameterization
     vector[n_s] alpha = inv_logit(alpha_mu + alpha_sigma*alpha_z);
@@ -163,11 +163,11 @@ transformed parameters {
           // Add to the vector of predicted Vs - first transforming V to be on the probability scale
           prob_pred[prob_rat_num[s,t]] = 0.5 + V[s,t+1,frac[s,t]]/(2*out_size); 
           // Save centered probability ratings for priming effects on future valence ratings
-          pr_preds[s,t,1] = prob_rat[prob_rat_num[s,t]] - 0.5;
+          pr_preds[s,t] = prob_rat[prob_rat_num[s,t]] - 0.5;
           // Set the V residual
           V_resid[s,t+1,frac[s,t]] = (2*out_size*prob_rat[prob_rat_num[s,t]] - out_size) - V[s,t+1,frac[s,t]]; 
         } else{
-          pr_preds[s,t,1] = 0; // If no probability rating, assign 0 to priming predictor
+          pr_preds[s,t] = 0; // If no probability rating, assign 0 to priming predictor
           V_resid[s,t+1,frac[s,t]] = 0; // If no rating, reset the residual
         }
         
@@ -180,7 +180,7 @@ transformed parameters {
               sum_pr = 0;
             } else {
               // For priming effects, use only prior trials so lag-1 has no decay
-              sum_pr = (decay_vec_pr[(n_tb-(t-1)+1):n_tb]*pr_preds[s,1:(t-1)])[1];
+              sum_pr = dot_product(decay_vec_pr[(n_tb-(t-1)+1):n_tb], pr_preds[s,1:(t-1)]);
             }
           } else {
             // If it's the second block, don't include values from the previous block in the sums
@@ -189,7 +189,7 @@ transformed parameters {
               sum_pr = 0;
             } else {
               // For priming effects, use only prior trials so lag-1 has no decay
-              sum_pr = (decay_vec_pr[(n_tb-((t-1)-n_tb)+1):n_tb]*pr_preds[s,(n_tb+1):(t-1)])[1];
+              sum_pr = dot_product(decay_vec_pr[(n_tb-((t-1)-n_tb)+1):n_tb], pr_preds[s,(n_tb+1):(t-1)]);
             }
           }
           // Generate valence prediction
