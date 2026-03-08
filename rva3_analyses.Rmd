@@ -719,6 +719,7 @@ fcv_no_decay <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_no_decay.sta
                                   study = "rva3")
 ```
 
+For comparison, running forget_combined_vresid for the standard 1000 draws
 ```{r}
 fcv_1000draws <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_1000draws.stan"),
                                   model_out_dir=model_out_dir,
@@ -726,7 +727,6 @@ fcv_1000draws <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_1000draws.s
                                   study = "rva3")
 ```
 
-For comparison, running forget_combined_vresid for the standard 1000 draws
 ```{r}
 fsml_compare(fcv_no_decay,fcv_1000draws)
 ```
@@ -842,5 +842,107 @@ get_ci_pd(draws = vec_ws_prereg_org[,,"rpe"],scale=200)
 cat("diff_vec\n")
 diff <- vec_ws_prereg_org[,,"rew"] - vec_ws_prereg_org[,,"rpe"]
 get_ci_pd(draws=diff,scale=200)
+```
+
+# Controlling for Vd
+Control for current Vd in model
+```{r}
+forget_combined_vresid_vd_cntrl <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_vresid_vd_cntrl.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+```{r}
+filt_sum(forget_combined_vresid_vd_cntrl$sum,"mu")
+```
+CIs for V_d and V_nd now include 0, so this analysis doesn't do the trick.
+
+# Equivalence tests
+
+Try fitting a model that restricts effects of V_d and V_nd to be the same, and see how much fit worsens
+```{r}
+forget_combined_vresid_equalv <- fit_stan_model(stan_file=paste0(stan_model_dir,"forget_combined_vresid_equalv.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3")
+```
+
+Compare with LOO
+```{r}
+fsml_compare(forget_combined_vresid_equalv,fcv_1000draws)
+```
+No improvement. To hammer this home, let's see if the difference is less than 8.
+```{r}
+lcomp <- loo_compare(forget_combined_vresid_equalv$loo,fcv_1000draws$loo)
+lcomp[2,1]*2
+```
+Yep, less than 8. Def no improvement in predictive performance.
+
+
+Calculate and compare rsq values
+```{r}
+# For fcv_1000
+val_pred_fcv1000 <- get_draws("fcv_1000draws",model_out_dir=model_out_dir,vars=c("val_pred"))
+val_sigma_fcv1000 <- get_draws("fcv_1000draws",model_out_dir=model_out_dir,vars=c("val_sigma_ss"))
+val_resid_var_fcv1000 <- get_trunc_norm_var_3darray(val_pred_fcv1000,val_sigma_fcv1000,0,1)
+val_rsq_fcv1000 <- mcmc_rsq(val_pred_fcv1000,val_resid_var_fcv1000,sd=FALSE,print_plot=FALSE)
+cat(paste0("Valence ratings r-sq for fcv_1000: ",val_rsq_fcv1000$sum$mean))
+
+# For
+val_pred_equalv <- get_draws("forget_combined_vresid_equalv",model_out_dir=model_out_dir,vars=c("val_pred"))
+val_sigma_equalv <- get_draws("forget_combined_vresid_equalv",model_out_dir=model_out_dir,vars=c("val_sigma_ss"))
+val_resid_var_equalv <- get_trunc_norm_var_3darray(val_pred_equalv,val_sigma_equalv,0,1)
+val_rsq_equalv <- mcmc_rsq(val_pred_equalv,val_resid_var_equalv,sd=FALSE,print_plot=FALSE)
+cat(paste0("\nValence ratings r-sq for equalv: ",val_rsq_equalv$sum$mean))
+
+# Difference 
+rsq_diff <- val_rsq_fcv1000$draws-val_rsq_equalv$draws
+cat("\nfcv_1000-equalv\n")
+get_ci_pd(draws=rsq_diff,round=4)
+```
+
+# Probability-rating priming models
+
+Fit model with estimated priming decay (`kappa`)
+```{r}
+fcv_pratprime_ext <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_pratprime_ext.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3",
+                                  ci_probs=c(.025,.975))
+```
+
+Fit model with `kappa` fixed to 0 (next-trial-only priming)
+```{r}
+fcv_pratprime_nexttrial <- fit_stan_model(stan_file=paste0(stan_model_dir,"fcv_pratprime_nexttrial.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3",
+                                  ci_probs=c(.025,.975))
+```
+
+Check fits, compared to the original
+```{r}
+filt_sum(fcv_pratprime_nexttrial$sum,"mu")
+```
+
+```{r}
+filt_sum(fcv_pratprime_ext$sum,"mu")
+```
+
+```{r}
+filt_sum(fcv_1000draws$sum,"mu")
+```
+
+Model comparisons
+```{r}
+fsml_compare(fcv_pratprime_ext,fcv_pratprime_nexttrial)
+```
+```{r}
+fsml_compare(fcv_pratprime_nexttrial,fcv_1000draws)
+```
+```{r}
+fsml_compare(fcv_pratprime_ext,fcv_1000draws)
 ```
 
