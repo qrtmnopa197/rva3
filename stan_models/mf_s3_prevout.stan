@@ -169,13 +169,18 @@ transformed parameters {
 
         // Predict only eligible valence observations; excluded rows keep default placeholders.
         if (val_rat_num[s,t] != 0 && rew_hid[s,t] == 0 && cue_out_prev_avail[s,t] == 1) {
+          real cue_prev_sc = cue_out_prev[s,t] / 200; // Scale to [-0.5, 0.5]
+          real rew_sc = rew[s,t] / 200; // Scale to [-0.5, 0.5]
+          real int_sc = cue_prev_sc * rew_sc; // Scale to [-0.25, 0.25]
+          real rew_hist_sc = rew_hist / 200; // Scale reward history to points/200
+
           val_pred[val_rat_num[s,t]] = inv_logit(
             w_0[s] + w_bl[s]*bl_cent[s,t] + w_tr[s]*tr_cent[s,t]
-            + w_pco[s]*cue_out_prev[s,t]
-            + w_out[s]*rew[s,t]
-            + w_int[s]*(cue_out_prev[s,t]*rew[s,t])
+            + w_pco[s]*cue_prev_sc
+            + w_out[s]*rew_sc
+            + w_int[s]*int_sc
             + w_pr[s]*pr_prev
-            + w_rhist[s]*rew_hist
+            + w_rhist[s]*rew_hist_sc
             + w_hid[s]*hid_hist
           );
           val_sigma_ss[val_rat_num[s,t]] = val_sigma[s];
@@ -219,27 +224,28 @@ model {
   w_tr_sigma ~ normal(0,0.06);
   w_tr_z ~ std_normal();
 
-  // Outcome-scale effects
-  w_out_mu ~ normal(0,0.03);
-  w_out_sigma ~ normal(0,0.05);
+  // Effects on predictors scaled by /200
+  w_out_mu ~ normal(0,6);
+  w_out_sigma ~ normal(0,10);
   w_out_z ~ std_normal();
   
-  w_pco_mu ~ normal(0,0.03);
-  w_pco_sigma ~ normal(0,0.05);
+  w_pco_mu ~ normal(0,6);
+  w_pco_sigma ~ normal(0,10);
   w_pco_z ~ std_normal();
 
-  w_int_mu ~ normal(0,0.03);
-  w_int_sigma ~ normal(0,0.05);
-  w_int_z ~ std_normal();
-  
   w_pr_mu ~ normal(0,6);
   w_pr_sigma ~ normal(0,10);
   w_pr_z ~ std_normal();
 
-  w_rhist_mu ~ normal(0,0.03);
-  w_rhist_sigma ~ normal(0,0.05);
+  w_rhist_mu ~ normal(0,6);
+  w_rhist_sigma ~ normal(0,10);
   w_rhist_z ~ std_normal();
-
+  
+  // Scale for interaction term is half as large
+  w_int_mu ~ normal(0,12);
+  w_int_sigma ~ normal(0,20);
+  w_int_z ~ std_normal();
+  
   w_hid_mu ~ normal(0,4);
   w_hid_sigma ~ normal(0,6);
   w_hid_z ~ std_normal();

@@ -1014,9 +1014,8 @@ mf_s3_prevout <- fit_stan_model(stan_file=paste0(stan_model_dir,"mf_s3_prevout.s
 ```{r}
 filt_sum(mf_s3_prevout$sum,"mu")
 ```
-Terrible diagnostics...
+No effect of previous cue outcome.
 
-Run mf analysis with previous outcome - instead of previous prob. rating - from the current cue (exponential decay priming)
 ```{r}
 mf_s3_prevout_pratprime_ext <- fit_stan_model(stan_file=paste0(stan_model_dir,"mf_s3_prevout_pratprime_ext.stan"),
                                   model_out_dir=model_out_dir,
@@ -1028,5 +1027,6 @@ mf_s3_prevout_pratprime_ext <- fit_stan_model(stan_file=paste0(stan_model_dir,"m
 ```{r}
 filt_sum(mf_s3_prevout_pratprime_ext$sum,"mu")
 ```
+Ditto.
 
 Also terribel diagnostics. What's wrong with the previous outcome models?
