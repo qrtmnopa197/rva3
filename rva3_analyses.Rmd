@@ -946,3 +946,31 @@ fsml_compare(fcv_pratprime_nexttrial,fcv_1000draws)
 fsml_compare(fcv_pratprime_ext,fcv_1000draws)
 ```
 
+# MF model (Study 3)
+
+Run affect-only model with cue-linked probability predictor and reward-history term
+```{r}
+mf_s3 <- fit_stan_model(stan_file=paste0(stan_model_dir,"mf_s3.stan"),
+                                  model_out_dir=model_out_dir,
+                                  raw_data=trials,
+                                  study = "rva3",
+                                  ci_probs=c(.025,.975))
+```
+
+Construct posterior effect of probability at outcomes +100 and -100
+```{r}
+mf_s3_eff <- get_draws("mf_s3",model_out_dir=model_out_dir,vars=c("w_prob_mu","w_int_mu"))
+
+prob_eff_out100 <- mf_s3_eff[,,"w_prob_mu"] + 100*mf_s3_eff[,,"w_int_mu"]
+prob_eff_outm100 <- mf_s3_eff[,,"w_prob_mu"] - 100*mf_s3_eff[,,"w_int_mu"]
+
+cat("Effect of probability when outcome is +100\n")
+get_ci_pd(draws=prob_eff_out100)
+
+cat("\nEffect of probability when outcome is -100\n")
+get_ci_pd(draws=prob_eff_outm100)
+```
+
+```{r}
+filt_sum(mf_s3$sum,"mu")
+```
