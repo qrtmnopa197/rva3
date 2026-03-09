@@ -31,6 +31,8 @@ transformed data{
 
   // 1 if valence observation should be included in likelihood, 0 otherwise
   array[n_vrat] int val_keep = rep_array(0,n_vrat);
+  int n_vkeep = 0; // Number of valence observations kept in likelihood
+  array[n_vrat] int vkeep_idx = rep_array(0,n_vrat); // Indices of kept valence observations
 
   for (s in 1:n_s) {
     array[n_f] real last_pr = rep_array(0.0,n_f); // Last probability rating for each cue in block
@@ -66,6 +68,14 @@ transformed data{
         last_was_pr[f] = 0;
         last_pr[f] = 0;
       }
+    }
+  }
+  
+  // Build compact index of valence observations included in likelihood.
+  for (i in 1:n_vrat) {
+    if (val_keep[i] == 1) {
+      n_vkeep += 1;
+      vkeep_idx[n_vkeep] = i;
     }
   }
 }
@@ -242,22 +252,24 @@ model {
   val_sigma_sigma ~ normal(0,2);
   val_sigma_z ~ std_normal();
 
-  // Include only eligible valence observations in likelihood
-  for (i in 1:n_vrat) {
-    if (val_keep[i] == 1) {
+  // Include only eligible valence observations in likelihood.
+  if (n_vkeep > 0) {
+    for (k in 1:n_vkeep) {
+      int i = vkeep_idx[k];
       val_rat[i] ~ normal(val_pred[i], val_sigma_ss[i]) T[0,1];
     }
   }
 }
 
 generated quantities {
-  // Log likelihoods of valence ratings (0 for excluded observations).
-  vector[n_vrat] val_lik = rep_vector(0,n_vrat);
+  // Log likelihoods for included valence observations only.
+  vector[n_vkeep] val_lik;
 
-  for (i in 1:n_vrat) {
-    if (val_keep[i] == 1) {
-      // Truncated-normal log likelihood to match model block
-      val_lik[i] = normal_lpdf(val_rat[i] | val_pred[i], val_sigma_ss[i]) -
+  if (n_vkeep > 0) {
+    for (k in 1:n_vkeep) {
+      int i = vkeep_idx[k];
+      // Truncated-normal log likelihood to match model block.
+      val_lik[k] = normal_lpdf(val_rat[i] | val_pred[i], val_sigma_ss[i]) -
                    log_diff_exp(normal_lcdf(1 | val_pred[i], val_sigma_ss[i]),
                                 normal_lcdf(0 | val_pred[i], val_sigma_ss[i]));
     }
