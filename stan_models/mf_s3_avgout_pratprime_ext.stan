@@ -236,8 +236,8 @@ model {
   w_out_sigma ~ normal(0,10);
   w_out_z ~ std_normal();
 
-  w_int_mu ~ normal(0,12);
-  w_int_sigma ~ normal(0,20);
+  w_int_mu ~ normal(0,4);
+  w_int_sigma ~ normal(0,6);
   w_int_z ~ std_normal();
   
   w_rhist_mu ~ normal(0,6);

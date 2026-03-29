@@ -239,8 +239,8 @@ model {
   w_rhist_z ~ std_normal();
   
   // Scale for interaction term is half as large
-  w_int_mu ~ normal(0,12);
-  w_int_sigma ~ normal(0,20);
+  w_int_mu ~ normal(0,4);
+  w_int_sigma ~ normal(0,6);
   w_int_z ~ std_normal();
   
   w_hid_mu ~ normal(0,4);
